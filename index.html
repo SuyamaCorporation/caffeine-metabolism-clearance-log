@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Caffeine Metabolism Clearance Log</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen py-8 px-4">
+<div class="max-w-2xl mx-auto">
+<h1 class="text-3xl font-bold text-amber-400 mb-1">Caffeine Clearance Log</h1>
+<p class="text-gray-400 text-sm mb-6">Pharmacokinetic model · 5h half-life · Real-time clearance chart</p>
+
+<div class="bg-gray-800 rounded-2xl p-5 mb-5">
+  <p class="text-sm font-semibold text-gray-300 mb-3">Log Intake</p>
+  <div class="grid grid-cols-2 gap-3 mb-3">
+    <div>
+      <label class="block text-xs text-gray-400 mb-1" for="drinkType">Drink</label>
+      <select id="drinkType" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+        aria-label="Select drink type">
+        <option value="95">Coffee (95 mg)</option>
+        <option value="63">Espresso (63 mg)</option>
+        <option value="47">Tea (47 mg)</option>
+        <option value="0">Custom</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-gray-400 mb-1" for="customMg">Mg (if custom)</label>
+      <input id="customMg" type="number" value="100" min="1" max="1000"
+        class="w-full bg-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+        aria-label="Custom caffeine amount in milligrams">
+    </div>
+  </div>
+  <div class="mb-3">
+    <label class="block text-xs text-gray-400 mb-1" for="intakeTime">Time</label>
+    <input id="intakeTime" type="time"
+      class="w-full bg-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+      aria-label="Time of caffeine intake">
+  </div>
+  <button id="addBtn" class="w-full py-2 bg-amber-600 hover:bg-amber-500 rounded-lg font-semibold transition"
+    aria-label="Add caffeine intake to log">Add Intake</button>
+</div>
+
+<div class="bg-gray-800 rounded-2xl p-5 mb-5">
+  <div class="flex justify-between items-center mb-1">
+    <p class="text-sm font-semibold text-gray-300">Caffeine Level (Next 24h)</p>
+    <span id="clearTime" class="text-xs text-green-400"></span>
+  </div>
+  <canvas id="chart" height="160" role="img" aria-label="Caffeine level chart over 24 hours" class="w-full rounded-lg"></canvas>
+  <div class="flex gap-4 mt-3 text-xs text-gray-500">
+    <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-amber-400"></span>Caffeine level</span>
+    <span class="flex items-center gap-1"><span class="inline-block w-3 h-3 rounded-sm bg-red-500"></span>50mg threshold</span>
+  </div>
+</div>
+
+<div class="bg-gray-800 rounded-2xl p-5">
+  <div class="flex justify-between items-center mb-3">
+    <p class="text-sm font-semibold text-gray-300">Today's Intake Log</p>
+    <button id="clearBtn" class="text-xs text-red-400 hover:text-red-300 transition" aria-label="Clear today's caffeine log">Clear Today</button>
+  </div>
+  <div id="logList" class="space-y-2 text-sm text-gray-300"></div>
+  <p id="emptyMsg" class="text-gray-600 text-sm text-center py-3">No intake logged yet</p>
+</div>
+</div>
+
+<script>
+const LS_KEY = 'caffeine_log_v1';
+const HALF_LIFE_H = 5;
+const THRESHOLD_MG = 50;
+const K = Math.log(2) / HALF_LIFE_H;
+
+function todayKey() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+
+function loadLog() {
+  try {
+    const d = JSON.parse(localStorage.getItem(LS_KEY)) || {};
+    return d[todayKey()] || [];
+  } catch { return []; }
+}
+
+function saveLog(log) {
+  try {
+    const d = JSON.parse(localStorage.getItem(LS_KEY)) || {};
+    d[todayKey()] = log;
+    localStorage.setItem(LS_KEY, JSON.stringify(d));
+  } catch {}
+}
+
+function calcLevel(log, timeMs) {
+  return log.reduce((sum, entry) => {
+    const hoursAgo = (timeMs - entry.ts) / 3600000;
+    if (hoursAgo < 0) return sum;
+    return sum + entry.mg * Math.exp(-K * hoursAgo);
+  }, 0);
+}
+
+function setDefaultTime() {
+  const now = new Date();
+  document.getElementById('intakeTime').value =
+    String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+}
+
+function drawChart(log) {
+  const canvas = document.getElementById('chart');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.offsetWidth * devicePixelRatio;
+  const H = canvas.offsetHeight * devicePixelRatio;
+  canvas.width = W; canvas.height = H;
+  ctx.fillStyle = '#1f2937'; ctx.fillRect(0, 0, W, H);
+  const now = Date.now();
+  const startMs = now;
+  const endMs = now + 24 * 3600000;
+  const steps = 200;
+  const pad = { top: 15, right: 15, bottom: 30, left: 50 };
+  const chartW = W - pad.left - pad.right;
+  const chartH = H - pad.top - pad.bottom;
+  const points = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = startMs + (i / steps) * (endMs - startMs);
+    points.push(calcLevel(log, t));
+  }
+  const maxLevel = Math.max(300, ...points) * 1.1;
+  function xp(i) { return pad.left + (i / steps) * chartW; }
+  function yp(v) { return pad.top + chartH - (v / maxLevel) * chartH; }
+  ctx.strokeStyle = '#374151'; ctx.lineWidth = 1;
+  [0, 100, 200, 300].forEach(v => {
+    const y = yp(v);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#6b7280'; ctx.font = `${9 * devicePixelRatio}px sans-serif`;
+    ctx.fillText(v + 'mg', 2, y + 4);
+  });
+  for (let h = 0; h <= 24; h += 4) {
+    const x = pad.left + (h / 24) * chartW;
+    ctx.strokeStyle = '#374151'; ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(x, pad.top); ctx.lineTo(x, H - pad.bottom); ctx.stroke();
+    const labelH = new Date(startMs + h * 3600000).getHours();
+    ctx.fillStyle = '#9ca3af'; ctx.font = `${9 * devicePixelRatio}px sans-serif`;
+    ctx.fillText(String(labelH).padStart(2,'0') + ':00', x - 14, H - pad.bottom + 14);
+  }
+  ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 1.5 * devicePixelRatio; ctx.setLineDash([4, 4]);
+  const ty = yp(THRESHOLD_MG);
+  ctx.beginPath(); ctx.moveTo(pad.left, ty); ctx.lineTo(W - pad.right, ty); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath(); ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2 * devicePixelRatio;
+  points.forEach((v, i) => {
+    const x = xp(i), y = yp(Math.min(v, maxLevel));
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.strokeStyle = '#4b5563'; ctx.lineWidth = 2 * devicePixelRatio;
+  ctx.beginPath(); ctx.moveTo(pad.left, pad.top); ctx.lineTo(pad.left, H - pad.bottom); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(pad.left, H - pad.bottom); ctx.lineTo(W - pad.right, H - pad.bottom); ctx.stroke();
+}
+
+function findClearTime(log) {
+  const now = Date.now();
+  for (let h = 0; h <= 24; h += 0.1) {
+    const t = now + h * 3600000;
+    if (calcLevel(log, t) < THRESHOLD_MG) {
+      const d = new Date(t);
+      return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    }
+  }
+  return '>24h';
+}
+
+function renderLog(log) {
+  const list = document.getElementById('logList');
+  const empty = document.getElementById('emptyMsg');
+  list.textContent = '';
+  if (log.length === 0) { empty.classList.remove('hidden'); return; }
+  empty.classList.add('hidden');
+  [...log].reverse().forEach((entry, i) => {
+    const d = new Date(entry.ts);
+    const timeStr = String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
+    const row = document.createElement('div');
+    row.className = 'flex justify-between items-center bg-gray-700 rounded-lg px-4 py-2';
+    const left = document.createElement('span');
+    left.textContent = timeStr + ' — ' + entry.name;
+    const right = document.createElement('span');
+    right.className = 'text-amber-400 font-semibold';
+    right.textContent = entry.mg + ' mg';
+    row.appendChild(left);
+    row.appendChild(right);
+    list.appendChild(row);
+  });
+}
+
+function update(log) {
+  renderLog(log);
+  setTimeout(() => {
+    drawChart(log);
+    const ct = findClearTime(log);
+    const el = document.getElementById('clearTime');
+    el.textContent = ct === '>24h' ? 'Below 50mg: >24h' : 'Below 50mg at: ' + ct;
+  }, 30);
+}
+
+let log = loadLog();
+setDefaultTime();
+update(log);
+
+document.getElementById('drinkType').addEventListener('change', function() {
+  document.getElementById('customMg').disabled = this.value !== '0';
+});
+document.getElementById('customMg').disabled = true;
+
+document.getElementById('addBtn').addEventListener('click', () => {
+  const select = document.getElementById('drinkType');
+  const mg = select.value === '0'
+    ? parseInt(document.getElementById('customMg').value)
+    : parseInt(select.value);
+  const name = select.options[select.selectedIndex].text.split(' (')[0];
+  const timeVal = document.getElementById('intakeTime').value;
+  const [h, m] = timeVal.split(':').map(Number);
+  const d = new Date(); d.setHours(h, m, 0, 0);
+  log.push({ mg, name, ts: d.getTime() });
+  log.sort((a, b) => a.ts - b.ts);
+  saveLog(log);
+  update(log);
+});
+
+document.getElementById('clearBtn').addEventListener('click', () => {
+  log = [];
+  saveLog(log);
+  update(log);
+});
+
+window.addEventListener('resize', () => { if (log.length >= 0) drawChart(log); });
+</script>
+</body>
+</html>
